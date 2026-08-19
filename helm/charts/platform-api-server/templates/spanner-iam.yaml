@@ -1,4 +1,5 @@
 {{- if and .Values.spanner.enabled .Values.spanner.iam.serviceAccount }}
+# Runtime data-plane access: the main container reads/writes Spanner data.
 apiVersion: iam.cnrm.cloud.google.com/v1beta1
 kind: IAMPolicyMember
 metadata:
@@ -8,10 +9,26 @@ metadata:
   labels:
     {{- include "platform-api-server.labels" . | nindent 4 }}
 spec:
-  # Workload Identity: the GCP service account bound to the pod's Kubernetes
-  # service account authenticates against Spanner using the granted role.
   member: {{ printf "serviceAccount:%s" .Values.spanner.iam.serviceAccount }}
   role: {{ .Values.spanner.iam.role }}
+  resourceRef:
+    kind: SpannerDatabase
+    name: {{ .Values.spanner.databaseId }}
+---
+# DDL admin access: the init container creates tables, indexes, and change
+# streams at startup. This requires GetDatabaseDdl and UpdateDatabaseDdl
+# permissions that are only in roles/spanner.databaseAdmin, not databaseUser.
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ printf "%s-spanner-admin" (include "platform-api-server.fullname" .) }}
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.spanner.projectId | quote }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+spec:
+  member: {{ printf "serviceAccount:%s" .Values.spanner.iam.serviceAccount }}
+  role: {{ .Values.spanner.iam.migrationRole }}
   resourceRef:
     kind: SpannerDatabase
     name: {{ .Values.spanner.databaseId }}

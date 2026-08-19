@@ -35,6 +35,7 @@ func main() {
 		authnKubeconfig string
 		authzKubeconfig string
 		disableAuth     bool
+		migrateOnly     bool
 	)
 
 	flag.StringVar(&address, "address", "0.0.0.0", "address to bind to")
@@ -47,9 +48,34 @@ func main() {
 	flag.StringVar(&authnKubeconfig, "authentication-kubeconfig", "", "kubeconfig for delegated authentication (in-cluster if empty)")
 	flag.StringVar(&authzKubeconfig, "authorization-kubeconfig", "", "kubeconfig for delegated authorization (in-cluster if empty)")
 	flag.BoolVar(&disableAuth, "disable-auth", false, "disable authentication/authorization (for testing/local dev)")
+	flag.BoolVar(&migrateOnly, "migrate-only", false, "run Spanner DDL migrations and exit (for init containers)")
 	flag.Parse()
 
 	logger := stdr.New(nil)
+
+	// --migrate-only: run Spanner DDL migrations with retry and exit.
+	// Designed for use as a Kubernetes init container with elevated IAM
+	// permissions (roles/spanner.databaseAdmin) so the main container can
+	// run with only roles/spanner.databaseUser.
+	if migrateOnly {
+		spannerDB := os.Getenv("SPANNER_DATABASE")
+		if spannerDB == "" {
+			log.Fatal("--migrate-only requires SPANNER_DATABASE to be set")
+		}
+		tablePrefix := os.Getenv("SPANNER_TABLE_PREFIX")
+
+		log.Printf("Running Spanner DDL migrations: %s", spannerDB)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		if err := spannerbackend.RunMigrations(ctx, spannerDB, tablePrefix, nil, logger); err != nil {
+			log.Fatalf("Spanner DDL migration failed: %v", err)
+		}
+
+		log.Println("Spanner DDL migrations completed successfully")
+		os.Exit(0)
+	}
 
 	// Parse CORS origins
 	origins := []string{}
@@ -70,6 +96,15 @@ func main() {
 		//   SPANNER_EMULATOR_HOST=localhost:9010
 		tablePrefix := os.Getenv("SPANNER_TABLE_PREFIX")
 
+		// SKIP_DDL_SETUP is set by the Helm chart when an init container
+		// handles DDL migrations. The init container runs with
+		// roles/spanner.databaseAdmin; the main container only needs
+		// roles/spanner.databaseUser for data operations.
+		skipDDL := os.Getenv("SKIP_DDL_SETUP") == "true"
+		if skipDDL {
+			log.Println("Skipping DDL setup (handled by init container)")
+		}
+
 		log.Printf("Connecting to Spanner database: %s", spannerDB)
 
 		factory, err := spannerbackend.NewStorageFactory(spannerbackend.StorageFactoryConfig{
@@ -77,6 +112,7 @@ func main() {
 			TablePrefix: tablePrefix,
 			Context:     context.Background(),
 			Logger:      logger,
+			SkipDDL:     skipDDL,
 		})
 		if err != nil {
 			log.Fatalf("Failed to create Spanner storage factory: %v", err)

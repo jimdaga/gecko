@@ -56,6 +56,12 @@ spec:
             {{- if .Values.spanner.enabled }}
             - name: SPANNER_DATABASE
               value: {{ printf "projects/%s/instances/%s/databases/%s" .Values.spanner.projectId .Values.spanner.instanceId .Values.spanner.databaseId | quote }}
+            - name: SKIP_DDL_SETUP
+              value: "true"
+            {{- if .Values.spanner.tablePrefix }}
+            - name: SPANNER_TABLE_PREFIX
+              value: {{ .Values.spanner.tablePrefix | quote }}
+            {{- end }}
             {{- else if .Values.alloydb.enabled }}
             - name: DB_HOST
               value: {{ required "alloydb.host is required when alloydb is enabled (set after AlloyDB instance is provisioned)" .Values.alloydb.host | quote }}

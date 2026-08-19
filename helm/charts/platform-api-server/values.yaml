@@ -151,17 +151,31 @@ alloydb:
 # configures the deployment with the SPANNER_DATABASE env var.
 # Requires the Config Connector (cnrm.cloud.google.com) operator to be
 # installed in the cluster and the pod's service account to be bound to a
-# GCP service account with roles/spanner.databaseUser via Workload Identity.
+# GCP service account via Workload Identity.
+#
+# IAM separation: an init container runs DDL migrations with
+# roles/spanner.databaseAdmin (GetDatabaseDdl, UpdateDatabaseDdl), then the
+# main container starts with only roles/spanner.databaseUser for data-plane
+# operations. This follows the principle of least privilege.
 spanner:
   enabled: false
   projectId: ""
   instanceId: ""
   databaseId: "gecko"
-  # IAM grant on the SpannerDatabase created by this chart. When serviceAccount
+  # Optional prefix for Spanner table names (e.g. "myapp_" creates
+  # "myapp_counters", "myapp_resources"). Must match between the migration
+  # Job and Deployment. Leave empty for no prefix.
+  tablePrefix: ""
+  # IAM grants on the SpannerDatabase created by this chart. When serviceAccount
   # (the GCP service account email bound to the pod's Kubernetes service
-  # account via Workload Identity) is set, an IAMPolicyMember grants it the
-  # role below on the database. Leave serviceAccount empty to skip the grant
-  # (e.g. when IAM is managed outside this chart).
+  # account via Workload Identity) is set, IAMPolicyMember resources grant it
+  # the roles below on the database. Leave serviceAccount empty to skip the
+  # grants (e.g. when IAM is managed outside this chart).
+  #
+  # Two roles are granted:
+  #   role          - data-plane access for the main container (read/write)
+  #   migrationRole - DDL admin access for the init container (schema setup)
   iam:
     serviceAccount: ""
     role: "roles/spanner.databaseUser"
+    migrationRole: "roles/spanner.databaseAdmin"

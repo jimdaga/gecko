@@ -2,8 +2,10 @@ package spanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/spanner"
 	database "cloud.google.com/go/spanner/admin/database/apiv1"
@@ -25,6 +27,11 @@ type StorageFactoryConfig struct {
 	Context     context.Context
 	ClientOpts  []option.ClientOption
 	Logger      logr.Logger
+
+	// SkipDDL skips the DDL migration step (ensureTable, ensureChangeStream,
+	// ensureSearchIndex). Set this to true when migrations are handled
+	// externally, e.g. by an init container running RunMigrations.
+	SkipDDL bool
 }
 
 func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Scheme, schema.GroupVersionKind) (storage.ResourceStore, error), error) {
@@ -47,30 +54,22 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 		}
 	}
 
-	adminClient := config.AdminClient
-	if adminClient == nil {
-		var err error
-		adminClient, err = database.NewDatabaseAdminClient(ctx, config.ClientOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create database admin client: %w", err)
-		}
-	}
-
 	countersTable := config.TablePrefix + "counters"
-	if err := ensureTable(ctx, adminClient, config.Database, countersTable, countersSchema(countersTable)); err != nil {
-		return nil, fmt.Errorf("failed to create counters table: %w", err)
-	}
-
 	resourcesTable := config.TablePrefix + "resources"
-	if err := ensureTable(ctx, adminClient, config.Database, resourcesTable, resourcesSchema(resourcesTable)); err != nil {
-		return nil, fmt.Errorf("failed to create resources table: %w", err)
-	}
-
-	ensureSearchIndex(ctx, adminClient, config.Database, resourcesTable, logger)
-
 	changeStreamName := config.TablePrefix + "cs_resources"
-	if err := ensureChangeStream(ctx, adminClient, config.Database, changeStreamName, changeStreamSchema(changeStreamName, resourcesTable)); err != nil {
-		return nil, fmt.Errorf("failed to create change stream: %w", err)
+
+	if !config.SkipDDL {
+		adminClient := config.AdminClient
+		if adminClient == nil {
+			var err error
+			adminClient, err = database.NewDatabaseAdminClient(ctx, config.ClientOpts...)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create database admin client: %w", err)
+			}
+		}
+		if err := runDDLSetup(ctx, adminClient, config.Database, countersTable, resourcesTable, changeStreamName, logger); err != nil {
+			return nil, err
+		}
 	}
 
 	factory := func(resourceType string, scheme *runtime.Scheme, gvk schema.GroupVersionKind) (storage.ResourceStore, error) {
@@ -113,6 +112,105 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 
 func gvkString(gvk schema.GroupVersionKind) string {
 	return gvk.Group + "/" + gvk.Version + "/" + gvk.Kind
+}
+
+// runDDLSetup executes DDL migrations (tables, indexes, change streams)
+// without retry. Called by NewStorageFactory when SkipDDL is false.
+func runDDLSetup(ctx context.Context, adminClient *database.DatabaseAdminClient, dbPath, countersTable, resourcesTable, changeStreamName string, logger logr.Logger) error {
+	if err := ensureTable(ctx, adminClient, dbPath, countersTable, countersSchema(countersTable)); err != nil {
+		return fmt.Errorf("failed to create counters table: %w", err)
+	}
+
+	if err := ensureTable(ctx, adminClient, dbPath, resourcesTable, resourcesSchema(resourcesTable)); err != nil {
+		return fmt.Errorf("failed to create resources table: %w", err)
+	}
+
+	ensureSearchIndex(ctx, adminClient, dbPath, resourcesTable, logger)
+
+	if err := ensureChangeStream(ctx, adminClient, dbPath, changeStreamName, changeStreamSchema(changeStreamName, resourcesTable)); err != nil {
+		return fmt.Errorf("failed to create change stream: %w", err)
+	}
+
+	return nil
+}
+
+// RunMigrations creates Spanner clients, runs all DDL migrations (tables,
+// indexes, change streams) with retry and exponential backoff, then closes
+// the clients. It is designed to run in an init container with
+// roles/spanner.databaseAdmin so that the main application container can
+// use the lower-privilege roles/spanner.databaseUser.
+func RunMigrations(ctx context.Context, database string, tablePrefix string, clientOpts []option.ClientOption, logger logr.Logger) error {
+	if logger.GetSink() == nil {
+		logger = logr.Discard()
+	}
+
+	adminClient, err := newDatabaseAdminClient(ctx, clientOpts...)
+	if err != nil {
+		return fmt.Errorf("failed to create database admin client: %w", err)
+	}
+	defer adminClient.Close()
+
+	countersTable := tablePrefix + "counters"
+	resourcesTable := tablePrefix + "resources"
+	changeStreamName := tablePrefix + "cs_resources"
+
+	const maxRetries = 7 // ~1+2+4+8+16+32 ≈ 63s total wait before the last attempt
+	backoff := time.Second
+
+	for attempt := 0; ; attempt++ {
+		err := runDDLSetup(ctx, adminClient, database, countersTable, resourcesTable, changeStreamName, logger)
+		if err == nil {
+			logger.Info("Spanner DDL migrations completed successfully")
+			return nil
+		}
+
+		if !isRetryableErr(err) || attempt >= maxRetries {
+			return fmt.Errorf("DDL migration failed after %d attempts: %w", attempt+1, err)
+		}
+
+		logger.Info("Spanner DDL migration failed, retrying",
+			"error", err.Error(),
+			"attempt", attempt+1,
+			"backoff", backoff.String())
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled during DDL migration retry: %w", ctx.Err())
+		case <-time.After(backoff):
+		}
+
+		if backoff < 32*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+// grpcStatuser is satisfied by any error that carries a gRPC status,
+// including the concrete *status.Status type and wrapped gRPC errors.
+type grpcStatuser interface {
+	GRPCStatus() *status.Status
+}
+
+// isRetryableErr returns true for gRPC errors that may resolve on their own,
+// such as PermissionDenied (IAM propagation delay) or Unavailable (transient
+// backend issue). It uses errors.As to traverse the full error tree,
+// including multi-wrapped errors (Go 1.20+).
+func isRetryableErr(err error) bool {
+	var gs grpcStatuser
+	if !errors.As(err, &gs) {
+		return false
+	}
+	switch gs.GRPCStatus().Code() {
+	case codes.PermissionDenied, codes.Unavailable:
+		return true
+	}
+	return false
+}
+
+// newDatabaseAdminClient creates a Spanner admin client. Extracted for
+// testability and reuse between NewStorageFactory and RunMigrations.
+func newDatabaseAdminClient(ctx context.Context, opts ...option.ClientOption) (*database.DatabaseAdminClient, error) {
+	return database.NewDatabaseAdminClient(ctx, opts...)
 }
 
 func countersSchema(tableName string) []string {
