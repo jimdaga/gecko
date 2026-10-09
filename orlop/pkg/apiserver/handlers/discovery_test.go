@@ -305,3 +305,88 @@ func TestAPIResourceList_MultipleResources(t *testing.T) {
 		}
 	})
 }
+
+func TestOpenAPIDiscoveryHonorsResourceScope(t *testing.T) {
+	const group = "test.orlop.gcp.managed.openshift.io"
+	const version = "v1"
+
+	provider := &mockResourceProvider{
+		resources: []types.ResourceInfo{
+			{
+				GVK:        runtimeschema.GroupVersionKind{Group: group, Version: version, Kind: "NamespacedObject"},
+				Plural:     "namespacedobjects",
+				Singular:   "namespacedobject",
+				Namespaced: true,
+				SchemaYAML: "type: object",
+			},
+			{
+				GVK:        runtimeschema.GroupVersionKind{Group: group, Version: version, Kind: "ClusterObject"},
+				Plural:     "clusterobjects",
+				Singular:   "clusterobject",
+				Namespaced: false,
+				SchemaYAML: "type: object",
+			},
+		},
+	}
+	handler := NewDiscoveryHandler(provider, nil)
+
+	t.Run("OpenAPI v3", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		handler.OpenAPIV3GroupVersion(w, httptest.NewRequest(http.MethodGet, "/openapi/v3/apis/"+group+"/"+version, nil), group, version)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var document struct {
+			Paths map[string]json.RawMessage `json:"paths"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &document); err != nil {
+			t.Fatalf("failed to decode OpenAPI v3 document: %v", err)
+		}
+		assertResourceScopePaths(t, document.Paths, group, version, "namespacedobjects", true)
+		assertResourceScopePaths(t, document.Paths, group, version, "clusterobjects", false)
+	})
+
+	t.Run("OpenAPI v2", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		handler.OpenAPIV2(w, httptest.NewRequest(http.MethodGet, "/openapi/v2", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var document struct {
+			Paths map[string]json.RawMessage `json:"paths"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &document); err != nil {
+			t.Fatalf("failed to decode OpenAPI v2 document: %v", err)
+		}
+		assertResourceScopePaths(t, document.Paths, group, version, "namespacedobjects", true)
+		assertResourceScopePaths(t, document.Paths, group, version, "clusterobjects", false)
+	})
+}
+
+func assertResourceScopePaths(t *testing.T, paths map[string]json.RawMessage, group, version, plural string, namespaced bool) {
+	t.Helper()
+	base := "/apis/" + group + "/" + version + "/"
+	if namespaced {
+		base += "namespaces/{namespace}/"
+	}
+	collection := base + plural
+	item := collection + "/{name}"
+	if _, ok := paths[collection]; !ok {
+		t.Errorf("missing collection path %q", collection)
+	}
+	if _, ok := paths[item]; !ok {
+		t.Errorf("missing item path %q", item)
+	}
+
+	wrongBase := "/apis/" + group + "/" + version + "/"
+	if namespaced {
+		wrongBase += plural
+	} else {
+		wrongBase += "namespaces/{namespace}/" + plural
+	}
+	if _, ok := paths[wrongBase]; ok {
+		t.Errorf("unexpected path %q for namespaced=%t", wrongBase, namespaced)
+	}
+}

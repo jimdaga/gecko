@@ -436,8 +436,13 @@ func (h *DiscoveryHandler) OpenAPIV3GroupVersion(w http.ResponseWriter, r *http.
 			"schema": map[string]interface{}{"type": "string"}, "description": "name of the " + res.GVK.Kind,
 		}
 
-		basePath := "/apis/" + group + "/" + version + "/namespaces/{namespace}/" + res.Plural
-		for p, entry := range v3ResourcePaths(basePath, []interface{}{namespaceParam}, nameParam, res.GVK.Kind, res.Plural, schemaRef, res) {
+		basePath := "/apis/" + group + "/" + version + "/" + res.Plural
+		params := []interface{}{}
+		if res.Namespaced {
+			basePath = "/apis/" + group + "/" + version + "/namespaces/{namespace}/" + res.Plural
+			params = append(params, namespaceParam)
+		}
+		for p, entry := range v3ResourcePaths(basePath, params, nameParam, res.GVK.Kind, res.Plural, schemaRef, res) {
 			paths[p] = entry
 		}
 
@@ -679,35 +684,38 @@ func (h *DiscoveryHandler) buildOpenAPIV2Spec() *openapispec.Swagger {
 			defName := res.GVK.Group + "." + res.GVK.Version + "." + res.GVK.Kind
 			definitions[defName] = schemaObj
 			defRef := fmt.Sprintf("#/definitions/%s", defName)
-			basePath := fmt.Sprintf("/apis/%s/namespaces/{namespace}/%s", gv, res.Plural)
+			basePath := fmt.Sprintf("/apis/%s/%s", gv, res.Plural)
 			ver := res.GVK.Version
 			kind := res.GVK.Kind
 
 			nsParam := map[string]interface{}{"name": "namespace", "in": "path", "required": true, "type": "string", "description": "object name and auth scope, such as for teams and projects"}
 			nameParam := map[string]interface{}{"name": "name", "in": "path", "required": true, "type": "string", "description": "name of the resource"}
 			bodyParam := map[string]interface{}{"name": "body", "in": "body", "required": true, "schema": map[string]interface{}{"$ref": defRef}}
+			collectionParams := []interface{}{}
+			itemParams := []interface{}{nameParam}
+			if res.Namespaced {
+				basePath = fmt.Sprintf("/apis/%s/namespaces/{namespace}/%s", gv, res.Plural)
+				collectionParams = append(collectionParams, nsParam)
+				itemParams = append([]interface{}{nsParam}, itemParams...)
+			}
 
 			// Collection operations
+			listParams := append([]interface{}{}, collectionParams...)
+			listParams = append(listParams,
+				map[string]interface{}{"name": "labelSelector", "in": "query", "type": "string", "description": "A selector to restrict the list of returned objects by their labels"},
+				map[string]interface{}{"name": "watch", "in": "query", "type": "boolean", "description": "Watch for changes to the described resources"},
+				map[string]interface{}{"name": "resourceVersion", "in": "query", "type": "string", "description": "When specified with watch, shows changes that occur after that version"},
+			)
+			createParams := append([]interface{}{}, collectionParams...)
+			createParams = append(createParams, bodyParam)
 			collectionEntry := map[string]interface{}{
-				"get": v2Operation(fmt.Sprintf("list%s%s", ver, kind), fmt.Sprintf("list objects of kind %s", kind), jsonMime, nil, []interface{}{
-					nsParam,
-					map[string]interface{}{"name": "labelSelector", "in": "query", "type": "string", "description": "A selector to restrict the list of returned objects by their labels"},
-					map[string]interface{}{"name": "watch", "in": "query", "type": "boolean", "description": "Watch for changes to the described resources"},
-					map[string]interface{}{"name": "resourceVersion", "in": "query", "type": "string", "description": "When specified with watch, shows changes that occur after that version"},
-				}, "200", "OK", defRef),
-				"post": v2Operation(fmt.Sprintf("create%s%s", ver, kind), fmt.Sprintf("create a %s", kind), jsonMime, jsonMime, []interface{}{
-					map[string]interface{}{"name": "namespace", "in": "path", "required": true, "type": "string"},
-					bodyParam,
-				}, "201", "Created", defRef),
+				"get":  v2Operation(fmt.Sprintf("list%s%s", ver, kind), fmt.Sprintf("list objects of kind %s", kind), jsonMime, nil, listParams, "200", "OK", defRef),
+				"post": v2Operation(fmt.Sprintf("create%s%s", ver, kind), fmt.Sprintf("create a %s", kind), jsonMime, jsonMime, createParams, "201", "Created", defRef),
 			}
 			paths[basePath] = filterPathEntry(collectionEntry, res, "list")
 
 			// Item operations
 			itemPath := basePath + "/{name}"
-			itemParams := []interface{}{
-				map[string]interface{}{"name": "namespace", "in": "path", "required": true, "type": "string"},
-				nameParam,
-			}
 			itemEntry := map[string]interface{}{
 				"get":    v2Operation(fmt.Sprintf("read%s%s", ver, kind), fmt.Sprintf("read the specified %s", kind), jsonMime, nil, itemParams, "200", "OK", defRef),
 				"put":    v2Operation(fmt.Sprintf("replace%s%s", ver, kind), fmt.Sprintf("replace the specified %s", kind), jsonMime, jsonMime, append(append([]interface{}{}, itemParams...), bodyParam), "200", "OK", defRef),
