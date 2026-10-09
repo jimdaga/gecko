@@ -1,4 +1,4 @@
-{{- if and .Values.gateway.enabled .Values.gateway.cloudArmor.enabled }}
+{{- if and .Values.gateway.enabled (or .Values.gateway.connectionDraining.enabled .Values.gateway.cloudArmor.enabled) }}
 ---
 apiVersion: networking.gke.io/v1
 kind: GCPBackendPolicy
@@ -10,7 +10,13 @@ metadata:
     app.kubernetes.io/component: gateway-backend-policy
 spec:
   default:
+    {{- if .Values.gateway.connectionDraining.enabled }}
+    connectionDraining:
+      drainingTimeoutSec: {{ .Values.gateway.connectionDraining.drainingTimeoutSec }}
+    {{- end }}
+    {{- if .Values.gateway.cloudArmor.enabled }}
     securityPolicy: {{ include "platform-api-server.fullname" . }}-cloud-armor
+    {{- end }}
   targetRef:
     group: ""
     kind: Service

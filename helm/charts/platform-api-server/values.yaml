@@ -87,7 +87,8 @@ podDisruptionBudget:
   minAvailable: 1
 
 revisionHistoryLimit: 10
-terminationGracePeriodSeconds: 30
+# Allow the Gateway NEG to detach the Pod before either container exits.
+terminationGracePeriodSeconds: 210
 
 nodeSelector: {}
 tolerations: []
@@ -99,6 +100,12 @@ imagePullSecrets: []
 
 gateway:
   enabled: true
+  # Keep both containers serving while GKE removes a terminating Pod from the
+  # Gateway NEG. The kubelet sleep hook does not require a shell in either image.
+  shutdownDelaySeconds: 120
+  connectionDraining:
+    enabled: true
+    drainingTimeoutSec: 60
   name: platform-external-gateway
   namespace: platform-gateway
   hostname: ""

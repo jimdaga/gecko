@@ -37,6 +37,12 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: {{ .Chart.Name }}
+          {{- if and .Values.gateway.enabled (gt (int .Values.gateway.shutdownDelaySeconds) 0) }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.gateway.shutdownDelaySeconds }}
+          {{- end }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -127,6 +133,12 @@ spec:
             {{- end }}
         {{- if .Values.esp.enabled }}
         - name: esp
+          {{- if and .Values.gateway.enabled (gt (int .Values.gateway.shutdownDelaySeconds) 0) }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.gateway.shutdownDelaySeconds }}
+          {{- end }}
           image: {{ .Values.esp.image }}
           args:
             - --listener_port={{ .Values.esp.port }}
