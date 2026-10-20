@@ -1,14 +1,15 @@
 # Go tools and linting
 
 The repository has three application modules: `orlop`, `platform-api`, and
-`controllers`. Each uses Go 1.26.4. The separate `hack/tools` module also uses
-Go 1.26.4 and pins golangci-lint and kube-api-linter with Go `tool` directives.
+`controllers`. Each requires Go 1.26.10. The separate `hack/tools` module also requires
+Go 1.26.10 and pins golangci-lint and kube-api-linter with Go `tool` directives.
 No root application module or Go workspace is needed.
 
 ## Prerequisites
 
-- Go 1.26.4 or newer. To verify with the minimum supported toolchain, set
-  `GOTOOLCHAIN=go1.26.4` when running the commands below.
+- Go 1.26.10, which includes the fix for CVE-2026-111943. Root Makefile targets
+  select this toolchain explicitly. For direct Go commands or module-specific
+  Makefile targets, set `GOTOOLCHAIN=go1.26.10`.
 - GNU Make, Git, and a C compiler for Go plugins (for example, Xcode Command Line
   Tools on macOS or GCC on Linux). Linting sets `CGO_ENABLED=1`.
 - Network access to download pinned modules and, when needed, the Go toolchain.

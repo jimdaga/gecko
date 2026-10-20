@@ -1,3 +1,6 @@
+# Pin the compiler and standard library for CVE-2026-111943.
+export GOTOOLCHAIN = go1.26.10
+
 .PHONY: lint lint-fix lint-fmt
 lint lint-fix lint-fmt:
 	@rc=0; for module in orlop platform-api controllers; do \

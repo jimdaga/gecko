@@ -1,6 +1,6 @@
 module github.com/openshift-online/gecko/hack/tools
 
-go 1.26.4
+go 1.26.10
 
 tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint

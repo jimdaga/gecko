@@ -1,6 +1,6 @@
 module github.com/openshift-online/gecko/hack/tools/plugin
 
-go 1.26.4
+go 1.26.10
 
 require golang.org/x/tools v0.52.0
 

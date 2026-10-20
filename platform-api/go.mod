@@ -1,6 +1,6 @@
 module github.com/openshift-online/gecko/platform-api
 
-go 1.26.4
+go 1.26.10
 
 require (
 	github.com/cedar-policy/cedar-go v1.8.0

@@ -1,6 +1,6 @@
 module github.com/openshift-online/gecko/orlop
 
-go 1.26.4
+go 1.26.10
 
 require (
 	cloud.google.com/go/spanner v1.96.1
