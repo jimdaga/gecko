@@ -7,12 +7,19 @@ No root application module or Go workspace is needed.
 
 ## Prerequisites
 
-- Go 1.26.10, which includes the fix for CVE-2026-111943. Root Makefile targets
-  select this toolchain explicitly. For direct Go commands or module-specific
-  Makefile targets, set `GOTOOLCHAIN=go1.26.10`.
+- Go 1.26.10 installed on `PATH`, which includes the fix for CVE-2026-111943.
+  Root Makefile targets check the installed version and set `GOTOOLCHAIN=local`;
+  they fail if the required compiler is missing instead of downloading another
+  toolchain. For direct Go commands or module-specific Makefile targets, use
+  the same installed compiler and set `GOTOOLCHAIN=local`.
 - GNU Make, Git, and a C compiler for Go plugins (for example, Xcode Command Line
   Tools on macOS or GCC on Linux). Linting sets `CGO_ENABLED=1`.
-- Network access to download pinned modules and, when needed, the Go toolchain.
+- Network access to download pinned modules.
+
+The production Containerfiles install Red Hat's `1.26.10-1.el9_8` Go RPMs from
+UBI repositories and build with `GOTOOLCHAIN=local`. This preserves the Red Hat
+compiler while the published UBI builder image still contains Go 1.26.7.
+CI images must also provide the patched compiler before running Makefile targets.
 
 Linter and generator executables do not need to be installed on `PATH`.
 The shared `hack/lint.mk` invokes
