@@ -16,10 +16,9 @@ No root application module or Go workspace is needed.
   Tools on macOS or GCC on Linux). Linting sets `CGO_ENABLED=1`.
 - Network access to download pinned modules.
 
-The production Containerfiles install Red Hat's `1.26.10-1.el9_8` Go RPMs from
-UBI repositories and build with `GOTOOLCHAIN=local`. This preserves the Red Hat
-compiler while the published UBI builder image still contains Go 1.26.7.
-CI images must also provide the patched compiler before running Makefile targets.
+Production Containerfiles use the Red Hat Go toolchain bundled with the UBI 9
+builder and set `GOTOOLCHAIN=local`. Builder and CI images must provide Go
+1.26.10 before compiling or running Makefile targets.
 
 Linter and generator executables do not need to be installed on `PATH`.
 The shared `hack/lint.mk` invokes
