@@ -1,3 +1,5 @@
+// e2e smoke test: verifying the gcp-hcp-infra PR-image override path
+// (openshift/release#87987, #87991). Safe to revert/close without merging.
 package main
 
 import (
